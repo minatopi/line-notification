@@ -1,6 +1,33 @@
-
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
+
+/* =========================================================
+   CORS
+   ========================================================= */
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
+  "Access-Control-Max-Age": "86400",
+};
+
+
+/* =========================================================
+   OPTIONS
+   ========================================================= */
+
+export async function OPTIONS() {
+  return new Response(null, {
+    status: 204,
+    headers: corsHeaders,
+  });
+}
+
+
+/* =========================================================
+   Supabase Admin
+   ========================================================= */
 
 function getSupabaseAdmin() {
   const url =
@@ -34,11 +61,9 @@ function getSupabaseAdmin() {
 }
 
 
-/*
-========================================
-安全なランダムコード
-========================================
-*/
+/* =========================================================
+   安全なランダム連携コード
+   ========================================================= */
 
 function generateCode() {
 
@@ -54,7 +79,11 @@ function generateCode() {
 
   let code = "";
 
-  for (let i = 0; i < values.length; i++) {
+  for (
+    let i = 0;
+    i < values.length;
+    i++
+  ) {
 
     code +=
       chars[
@@ -71,28 +100,23 @@ function generateCode() {
 }
 
 
-/*
-========================================
-SHA-256
-========================================
-*/
+/* =========================================================
+   文字列チェック
+   ========================================================= */
 
-function hashPassword(
-  password: string
-) {
+function getString(
+  value: unknown
+): string {
 
-  return crypto
-    .createHash("sha256")
-    .update(password)
-    .digest("hex");
+  return typeof value === "string"
+    ? value.trim()
+    : "";
 }
 
 
-/*
-========================================
-POST
-========================================
-*/
+/* =========================================================
+   POST
+   ========================================================= */
 
 export async function POST(
   request: Request
@@ -100,30 +124,136 @@ export async function POST(
 
   try {
 
-    const body =
-      await request.json();
-
-    const username =
-      typeof body.username === "string"
-        ? body.username.trim()
-        : "";
-
-    const userId =
-      typeof body.userId === "string"
-        ? body.userId.trim()
-        : "";
+    console.log(
+      "[LINE LINK CODE] POST received"
+    );
 
 
-    if (!username || !userId) {
+    /* =====================================================
+       JSON
+       ===================================================== */
+
+    let body: unknown;
+
+    try {
+
+      body =
+        await request.json();
+
+    } catch {
 
       return Response.json(
         {
           success: false,
           error:
-            "username と userId が必要です",
+            "JSONの解析に失敗しました",
         },
         {
           status: 400,
+          headers: corsHeaders,
+        }
+      );
+    }
+
+
+    if (
+      !body ||
+      typeof body !== "object"
+    ) {
+
+      return Response.json(
+        {
+          success: false,
+          error:
+            "不正なリクエストです",
+        },
+        {
+          status: 400,
+          headers: corsHeaders,
+        }
+      );
+    }
+
+
+    const data =
+      body as Record<string, unknown>;
+
+
+    const username =
+      getString(
+        data.username
+      );
+
+
+    /*
+     * ここはChanPro側で既存ログイン時に
+     * 作成したSHA-256パスワードハッシュ。
+     *
+     * 平文パスワードは送らない。
+     */
+    const passwordHash =
+      getString(
+        data.passwordHash
+      );
+
+
+    /* =====================================================
+       必須項目
+       ===================================================== */
+
+    if (!username) {
+
+      return Response.json(
+        {
+          success: false,
+          error:
+            "username が必要です",
+        },
+        {
+          status: 400,
+          headers: corsHeaders,
+        }
+      );
+    }
+
+
+    if (!passwordHash) {
+
+      return Response.json(
+        {
+          success: false,
+          error:
+            "passwordHash が必要です",
+        },
+        {
+          status: 400,
+          headers: corsHeaders,
+        }
+      );
+    }
+
+
+    /*
+     * SHA-256 hexは64文字。
+     *
+     * ブラウザ側のログインと同じ形式を
+     * 想定する。
+     */
+    if (
+      !/^[a-fA-F0-9]{64}$/.test(
+        passwordHash
+      )
+    ) {
+
+      return Response.json(
+        {
+          success: false,
+          error:
+            "passwordHashの形式が不正です",
+        },
+        {
+          status: 400,
+          headers: corsHeaders,
         }
       );
     }
@@ -133,28 +263,36 @@ export async function POST(
       getSupabaseAdmin();
 
 
-    /*
-    ========================================
-    ユーザー確認
-    ========================================
-    */
+    /* =====================================================
+       本人確認
+       
+       userIdは信用しない。
+       username + password_hash で確認する。
+       ===================================================== */
 
     const {
       data: user,
-      error: userError
+      error: userError,
     } =
       await supabase
         .from("users")
         .select(
-          "id, username, line_user_id"
-        )
-        .eq(
-          "id",
-          userId
+          `
+          id,
+          username,
+          password_hash,
+          line_user_id,
+          ban_count,
+          ban_until
+          `
         )
         .eq(
           "username",
           username
+        )
+        .eq(
+          "password_hash",
+          passwordHash
         )
         .maybeSingle();
 
@@ -174,6 +312,7 @@ export async function POST(
         },
         {
           status: 500,
+          headers: corsHeaders,
         }
       );
     }
@@ -181,47 +320,119 @@ export async function POST(
 
     if (!user) {
 
+      console.warn(
+        "[LINE LINK AUTH FAILED]",
+        {
+          username,
+        }
+      );
+
+      /*
+       * ユーザーの存在を推測されにくくするため、
+       * usernameだけが存在するかどうかは
+       * 返さない。
+       */
       return Response.json(
         {
           success: false,
           error:
-            "ユーザーが見つかりません",
+            "ユーザー名またはパスワードが正しくありません",
         },
         {
-          status: 404,
+          status: 401,
+          headers: corsHeaders,
         }
       );
     }
 
 
-    /*
-    ========================================
-    既存コードを無効化
-    ========================================
-    */
+    /* =====================================================
+       BAN確認
+       ===================================================== */
 
-    await supabase
-      .from("line_link_codes")
-      .delete()
-      .eq(
-        "user_id",
-        user.id
-      )
-      .is(
-        "used_at",
-        null
+    const now =
+      Date.now();
+
+    const banUntil =
+      user.ban_until
+        ? new Date(
+            user.ban_until
+          ).getTime()
+        : null;
+
+
+    if (
+      banUntil &&
+      !Number.isNaN(banUntil) &&
+      banUntil > now
+    ) {
+
+      return Response.json(
+        {
+          success: false,
+          error:
+            "現在このアカウントは利用停止中です。",
+        },
+        {
+          status: 403,
+          headers: corsHeaders,
+        }
+      );
+    }
+
+
+    /* =====================================================
+       既存の未使用コードを削除
+       ===================================================== */
+
+    const {
+      error: deleteError
+    } =
+      await supabase
+        .from("line_link_codes")
+        .delete()
+        .eq(
+          "user_id",
+          user.id
+        )
+        .is(
+          "used_at",
+          null
+        );
+
+
+    if (deleteError) {
+
+      console.error(
+        "[LINE LINK CODE DELETE ERROR]",
+        deleteError
       );
 
+      return Response.json(
+        {
+          success: false,
+          error:
+            "以前の連携コードを無効化できませんでした",
+        },
+        {
+          status: 500,
+          headers: corsHeaders,
+        }
+      );
+    }
 
-    /*
-    ========================================
-    新しいコード
-    ========================================
-    */
+
+    /* =====================================================
+       新しいコード
+       ===================================================== */
 
     const code =
       generateCode();
 
+
+    /*
+     * 10分間有効
+     */
 
     const expiresAt =
       new Date(
@@ -230,22 +441,34 @@ export async function POST(
       ).toISOString();
 
 
+    /* =====================================================
+       DB保存
+       ===================================================== */
+
     const {
+      data: insertedCode,
       error: insertError
     } =
       await supabase
-        .from("line_link_codes")
+        .from(
+          "line_link_codes"
+        )
         .insert({
-
           user_id:
             user.id,
 
           code,
 
           expires_at:
-            expiresAt
+            expiresAt,
 
-        });
+          used_at:
+            null,
+        })
+        .select(
+          "id, code, expires_at"
+        )
+        .single();
 
 
     if (insertError) {
@@ -263,6 +486,7 @@ export async function POST(
         },
         {
           status: 500,
+          headers: corsHeaders,
         }
       );
     }
@@ -271,26 +495,45 @@ export async function POST(
     console.log(
       "[LINE LINK CODE CREATED]",
       {
-        userId: user.id,
-        username: user.username,
-        codeId: code,
+        userId:
+          user.id,
+
+        username:
+          user.username,
+
+        codeId:
+          insertedCode.id,
+
+        expiresAt:
+          insertedCode.expires_at,
       }
     );
 
 
-    return Response.json({
+    /* =====================================================
+       成功
+       ===================================================== */
 
-      success: true,
+    return Response.json(
+      {
+        success: true,
 
-      code,
+        username:
+          user.username,
 
-      expires_at:
-        expiresAt
+        code:
+          insertedCode.code,
 
-    });
+        expires_at:
+          insertedCode.expires_at,
+      },
+      {
+        status: 200,
+        headers: corsHeaders,
+      }
+    );
 
-  }
-  catch (error) {
+  } catch (error) {
 
     console.error(
       "[LINE LINK CODE ERROR]",
@@ -307,29 +550,38 @@ export async function POST(
       },
       {
         status: 500,
+        headers: corsHeaders,
       }
     );
   }
 }
 
 
-/*
-========================================
-GET
-========================================
-*/
+/* =========================================================
+   GET
+   ========================================================= */
 
 export async function GET() {
 
-  return Response.json({
+  return Response.json(
+    {
+      success: true,
 
-    success: true,
+      service:
+        "ChanPro LINE Link Code API",
 
-    service:
-      "ChanPro LINE Link Code API",
+      message:
+        "POSTでLINE連携コードを発行します。",
 
-    message:
-      "POSTでLINE連携コードを発行します。"
+      code_format:
+        "CP-XXXX-XXXX",
 
-  });
+      expires_in:
+        "10 minutes",
+    },
+    {
+      status: 200,
+      headers: corsHeaders,
+    }
+  );
 }
