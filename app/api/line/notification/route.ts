@@ -1,5 +1,39 @@
 import { createClient } from "@supabase/supabase-js";
 
+
+/* =========================================================
+   CORS
+   ========================================================= */
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers":
+    "Content-Type, x-supabase-webhook-secret",
+  "Access-Control-Max-Age": "86400",
+};
+
+
+/* =========================================================
+   OPTIONS
+   ========================================================= */
+
+export async function OPTIONS() {
+
+  return new Response(
+    null,
+    {
+      status: 204,
+      headers: corsHeaders,
+    }
+  );
+}
+
+
+/* =========================================================
+   型
+   ========================================================= */
+
 type NotificationRecord = {
   id?: string | null;
   user_id?: string | null;
@@ -12,6 +46,7 @@ type NotificationRecord = {
   message?: string | null;
 };
 
+
 type TestRequest = {
   username?: string;
   message?: string;
@@ -23,9 +58,13 @@ type TestRequest = {
    ========================================================= */
 
 function getSupabaseAdmin() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+
+  const url =
+    process.env.NEXT_PUBLIC_SUPABASE_URL;
+
   const serviceRoleKey =
     process.env.SUPABASE_SERVICE_ROLE_KEY;
+
 
   if (!url) {
     throw new Error(
@@ -33,11 +72,13 @@ function getSupabaseAdmin() {
     );
   }
 
+
   if (!serviceRoleKey) {
     throw new Error(
       "SUPABASE_SERVICE_ROLE_KEY is not set"
     );
   }
+
 
   return createClient(
     url,
@@ -56,9 +97,13 @@ function getSupabaseAdmin() {
    Webhook Secret
    ========================================================= */
 
-function checkWebhookSecret(request: Request) {
+function checkWebhookSecret(
+  request: Request
+) {
+
   const expected =
     process.env.SUPABASE_WEBHOOK_SECRET;
+
 
   if (!expected) {
     throw new Error(
@@ -66,10 +111,12 @@ function checkWebhookSecret(request: Request) {
     );
   }
 
+
   const received =
     request.headers.get(
       "x-supabase-webhook-secret"
     );
+
 
   return (
     !!received &&
@@ -86,8 +133,10 @@ async function sendLineMessage(
   lineUserId: string,
   text: string
 ) {
+
   const accessToken =
     process.env.LINE_CHANNEL_ACCESS_TOKEN;
+
 
   if (!accessToken) {
     throw new Error(
@@ -95,34 +144,45 @@ async function sendLineMessage(
     );
   }
 
-  const response = await fetch(
-    "https://api.line.me/v2/bot/message/push",
-    {
-      method: "POST",
 
-      headers: {
-        "Content-Type": "application/json",
-        Authorization:
-          `Bearer ${accessToken}`,
-      },
+  const response =
+    await fetch(
+      "https://api.line.me/v2/bot/message/push",
+      {
+        method: "POST",
 
-      body: JSON.stringify({
-        to: lineUserId,
+        headers: {
+          "Content-Type":
+            "application/json",
 
-        messages: [
-          {
-            type: "text",
-            text,
-          },
-        ],
-      }),
-    }
-  );
+          Authorization:
+            `Bearer ${accessToken}`,
+        },
+
+        body:
+          JSON.stringify({
+            to:
+              lineUserId,
+
+            messages: [
+              {
+                type:
+                  "text",
+
+                text,
+              },
+            ],
+          }),
+      }
+    );
+
 
   const body =
     await response.text();
 
+
   if (!response.ok) {
+
     console.error(
       "[LINE API ERROR]",
       response.status,
@@ -134,97 +194,113 @@ async function sendLineMessage(
     );
   }
 
+
   console.log(
     "[LINE API] message sent",
     lineUserId
   );
+
 
   return true;
 }
 
 
 /* =========================================================
-   通知本文生成
+   通知本文
    ========================================================= */
 
 function createNotificationText(
   notification: NotificationRecord,
   actorName: string
 ) {
+
   const name =
-    actorName || "ユーザー";
+    actorName ||
+    "ユーザー";
 
   const type =
-    notification.type || "";
+    notification.type ||
+    "";
 
-  /*
-   * DM
-   */
-  if (type === "message") {
+
+  /* DM */
+
+  if (
+    type === "message"
+  ) {
+
     return (
       `✉️ ${name}さんからDMが届きました`
     );
   }
 
 
-  /*
-   * いいね
-   */
-  if (type === "like") {
+  /* いいね */
+
+  if (
+    type === "like"
+  ) {
+
     return (
       `❤️ ${name}さんがあなたの投稿にいいねしました`
     );
   }
 
 
-  /*
-   * 返信
-   */
-  if (type === "reply") {
+  /* 返信 */
+
+  if (
+    type === "reply"
+  ) {
+
     return (
       `💬 ${name}さんがあなたの投稿に返信しました`
     );
   }
 
 
-  /*
-   * リポスト
-   */
-  if (type === "repost") {
+  /* リポスト */
+
+  if (
+    type === "repost"
+  ) {
+
     return (
       `🔁 ${name}さんがあなたの投稿をリポストしました`
     );
   }
 
 
-  /*
-   * フォロー
-   */
-  if (type === "follow") {
+  /* フォロー */
+
+  if (
+    type === "follow"
+  ) {
+
     return (
       `👤 ${name}さんがあなたをフォローしました`
     );
   }
 
 
-  /*
-   * 新しい投稿
-   */
-  if (type === "post") {
+  /* 新規投稿 */
+
+  if (
+    type === "post"
+  ) {
+
     return (
       `📝 ${name}さんが新しい投稿をしました`
     );
   }
 
 
-  /*
-   * プロジェクトいいね
-   *
-   * ChanPro側では message に
-   * 実際の文章が入る場合があるため、
-   * messageを優先する。
-   */
-  if (type === "like-project") {
+  /* プロジェクトいいね */
+
+  if (
+    type === "like-project"
+  ) {
+
     return (
       `❤️ ${name}さんが${
         notification.message ||
@@ -234,30 +310,34 @@ function createNotificationText(
   }
 
 
-  /*
-   * プロジェクトいいね増加
-   *
-   * 例:
-   * program_like|xxx|3
-   *
-   * 現在のChanPro側のloadNotifications()
-   * と同じく3番目の値を件数として扱う。
-   */
+  /* プロジェクトいいね増加 */
+
   if (
     type === "program_like" ||
-    type.startsWith("program_like|")
+    type.startsWith(
+      "program_like|"
+    )
   ) {
+
     const parts =
       type.split("|");
 
     const count =
-      parseInt(parts[2], 10);
+      parseInt(
+        parts[2],
+        10
+      );
 
-    if (!Number.isNaN(count)) {
+
+    if (
+      !Number.isNaN(count)
+    ) {
+
       return (
         `❤️ ${name}さんのプロジェクトにいいねが ${count}件増えました`
       );
     }
+
 
     return (
       `❤️ ${name}さんのプロジェクトにいいねが増えました`
@@ -265,20 +345,17 @@ function createNotificationText(
   }
 
 
-  /*
-   * messageが存在するその他の通知
-   */
+  /* その他 */
+
   if (
     notification.message &&
     notification.message.trim()
   ) {
+
     return notification.message;
   }
 
 
-  /*
-   * 完全な未知タイプ
-   */
   return (
     `🔔 ${name}さんから新しい通知があります`
   );
@@ -292,42 +369,65 @@ function createNotificationText(
 export async function POST(
   request: Request
 ) {
+
   try {
+
     console.log(
       "[LINE NOTIFICATION] POST received"
     );
 
 
-    /* -----------------------------------------------------
-       JSON取得
-       ----------------------------------------------------- */
+    /* =====================================================
+       JSON
+       ===================================================== */
 
-    const payload =
-      await request.json();
+    let payload: any;
+
+    try {
+
+      payload =
+        await request.json();
+
+    } catch {
+
+      return Response.json(
+        {
+          success: false,
+          error:
+            "JSONの解析に失敗しました",
+        },
+        {
+          status: 400,
+          headers: corsHeaders,
+        }
+      );
+    }
 
 
     /* =====================================================
        テスト通知
-       =====================================================
-
-       HTMLから
-
-       {
-         username: "...",
-         message: "..."
-       }
-
-       が送られてきた場合。
-    */
+       
+       username + message
+       ===================================================== */
 
     if (
       payload &&
       typeof payload === "object" &&
       "username" in payload
     ) {
-      return await handleTestNotification(
-        payload as TestRequest
-      );
+
+      const result =
+        await handleTestNotification(
+          payload as TestRequest
+        );
+
+
+      /*
+       * handleTestNotification内部でも
+       * CORSを付けている。
+       */
+
+      return result;
     }
 
 
@@ -336,29 +436,34 @@ export async function POST(
        ===================================================== */
 
     if (
-      !checkWebhookSecret(request)
+      !checkWebhookSecret(
+        request
+      )
     ) {
+
       console.error(
         "[LINE NOTIFICATION] Invalid webhook secret"
       );
 
+
       return Response.json(
         {
           success: false,
-          error: "Unauthorized",
+          error:
+            "Unauthorized",
         },
         {
           status: 401,
+          headers: corsHeaders,
         }
       );
     }
 
 
-    /*
-     * Supabase Database Webhook
-     *
-     * record にnotificationsのINSERTデータが入る。
-     */
+    /* =====================================================
+       notification record
+       ===================================================== */
+
     const notification =
       payload?.record as
         | NotificationRecord
@@ -366,13 +471,16 @@ export async function POST(
 
 
     if (!notification) {
+
       return Response.json(
         {
           success: false,
-          error: "record is missing",
+          error:
+            "record is missing",
         },
         {
           status: 400,
+          headers: corsHeaders,
         }
       );
     }
@@ -380,22 +488,32 @@ export async function POST(
 
     console.log(
       "[LINE NOTIFICATION]",
-      JSON.stringify(notification)
+      JSON.stringify(
+        notification
+      )
     );
 
 
-    /* -----------------------------------------------------
-       user_id確認
-       ----------------------------------------------------- */
+    /* =====================================================
+       user_id
+       ===================================================== */
 
-    if (!notification.user_id) {
-      return Response.json({
-        success: true,
-        sent: false,
-        skipped: true,
-        reason:
-          "notification has no user_id",
-      });
+    if (
+      !notification.user_id
+    ) {
+
+      return Response.json(
+        {
+          success: true,
+          sent: false,
+          skipped: true,
+          reason:
+            "notification has no user_id",
+        },
+        {
+          headers: corsHeaders,
+        }
+      );
     }
 
 
@@ -403,9 +521,9 @@ export async function POST(
       getSupabaseAdmin();
 
 
-    /* -----------------------------------------------------
-       通知を受け取るユーザー
-       ----------------------------------------------------- */
+    /* =====================================================
+       通知受信ユーザー
+       ===================================================== */
 
     const {
       data: recipient,
@@ -424,10 +542,12 @@ export async function POST(
 
 
     if (recipientError) {
+
       console.error(
         "[RECIPIENT ERROR]",
         recipientError
       );
+
 
       return Response.json(
         {
@@ -437,53 +557,75 @@ export async function POST(
         },
         {
           status: 500,
+          headers: corsHeaders,
         }
       );
     }
 
 
     if (!recipient) {
-      return Response.json({
-        success: true,
-        sent: false,
-        skipped: true,
-        reason:
-          "recipient not found",
-      });
+
+      return Response.json(
+        {
+          success: true,
+          sent: false,
+          skipped: true,
+          reason:
+            "recipient not found",
+        },
+        {
+          headers: corsHeaders,
+        }
+      );
     }
 
 
-    /* -----------------------------------------------------
+    /* =====================================================
        LINE未連携
-       ----------------------------------------------------- */
+       ===================================================== */
 
-    if (!recipient.line_user_id) {
+    if (
+      !recipient.line_user_id
+    ) {
+
       console.log(
         "[LINE NOTIFICATION] LINE not linked:",
         recipient.username
       );
 
-      return Response.json({
-        success: true,
-        sent: false,
-        skipped: true,
-        reason:
-          "LINE is not linked",
-        user_id:
-          recipient.id,
-        username:
-          recipient.username,
-      });
+
+      return Response.json(
+        {
+          success: true,
+          sent: false,
+          skipped: true,
+          reason:
+            "LINE is not linked",
+
+          user_id:
+            recipient.id,
+
+          username:
+            recipient.username,
+        },
+        {
+          headers: corsHeaders,
+        }
+      );
     }
 
 
-    /* -----------------------------------------------------
-       actor取得
-       ----------------------------------------------------- */
+    /* =====================================================
+       actor
+       ===================================================== */
 
-    let actorName = "";
+    let actorName =
+      "";
 
-    if (notification.actor_id) {
+
+    if (
+      notification.actor_id
+    ) {
 
       const {
         data: actor,
@@ -502,20 +644,23 @@ export async function POST(
 
 
       if (actorError) {
+
         console.error(
           "[ACTOR ERROR]",
           actorError
         );
       }
 
+
       actorName =
-        actor?.username || "";
+        actor?.username ||
+        "";
     }
 
 
-    /* -----------------------------------------------------
-       LINE本文作成
-       ----------------------------------------------------- */
+    /* =====================================================
+       LINE本文
+       ===================================================== */
 
     const text =
       createNotificationText(
@@ -530,9 +675,9 @@ export async function POST(
     );
 
 
-    /* -----------------------------------------------------
+    /* =====================================================
        LINE送信
-       ----------------------------------------------------- */
+       ===================================================== */
 
     await sendLineMessage(
       recipient.line_user_id,
@@ -540,29 +685,36 @@ export async function POST(
     );
 
 
-    /* -----------------------------------------------------
-       成功
-       ----------------------------------------------------- */
+    /* =====================================================
+       完了
+       ===================================================== */
 
-    return Response.json({
-      success: true,
-      sent: true,
+    return Response.json(
+      {
+        success: true,
+        sent: true,
 
-      user_id:
-        recipient.id,
+        user_id:
+          recipient.id,
 
-      username:
-        recipient.username,
+        username:
+          recipient.username,
 
-      notification_id:
-        notification.id ?? null,
+        notification_id:
+          notification.id ??
+          null,
 
-      type:
-        notification.type ?? null,
+        type:
+          notification.type ??
+          null,
 
-      message:
-        text,
-    });
+        message:
+          text,
+      },
+      {
+        headers: corsHeaders,
+      }
+    );
 
   } catch (error) {
 
@@ -570,6 +722,7 @@ export async function POST(
       "[LINE NOTIFICATION ERROR]",
       error
     );
+
 
     return Response.json(
       {
@@ -581,6 +734,7 @@ export async function POST(
       },
       {
         status: 500,
+        headers: corsHeaders,
       }
     );
   }
@@ -594,16 +748,19 @@ export async function POST(
 async function handleTestNotification(
   payload: TestRequest
 ) {
+
   try {
 
     const username =
       payload.username?.trim();
+
 
     const message =
       payload.message?.trim();
 
 
     if (!username) {
+
       return Response.json(
         {
           success: false,
@@ -612,12 +769,14 @@ async function handleTestNotification(
         },
         {
           status: 400,
+          headers: corsHeaders,
         }
       );
     }
 
 
     if (!message) {
+
       return Response.json(
         {
           success: false,
@@ -626,6 +785,7 @@ async function handleTestNotification(
         },
         {
           status: 400,
+          headers: corsHeaders,
         }
       );
     }
@@ -635,13 +795,11 @@ async function handleTestNotification(
       getSupabaseAdmin();
 
 
-    /* -----------------------------------------------------
-       ChanProユーザー検索
-       ----------------------------------------------------- */
+    /* ユーザー */
 
     const {
       data: user,
-      error,
+      error
     } =
       await supabase
         .from("users")
@@ -656,10 +814,12 @@ async function handleTestNotification(
 
 
     if (error) {
+
       console.error(
         "[TEST USER ERROR]",
         error
       );
+
 
       return Response.json(
         {
@@ -669,12 +829,14 @@ async function handleTestNotification(
         },
         {
           status: 500,
+          headers: corsHeaders,
         }
       );
     }
 
 
     if (!user) {
+
       return Response.json(
         {
           success: false,
@@ -683,12 +845,14 @@ async function handleTestNotification(
         },
         {
           status: 404,
+          headers: corsHeaders,
         }
       );
     }
 
 
     if (!user.line_user_id) {
+
       return Response.json(
         {
           success: false,
@@ -697,14 +861,13 @@ async function handleTestNotification(
         },
         {
           status: 400,
+          headers: corsHeaders,
         }
       );
     }
 
 
-    /* -----------------------------------------------------
-       LINE送信
-       ----------------------------------------------------- */
+    /* LINE送信 */
 
     await sendLineMessage(
       user.line_user_id,
@@ -712,18 +875,23 @@ async function handleTestNotification(
     );
 
 
-    return Response.json({
-      success: true,
-      sent: true,
+    return Response.json(
+      {
+        success: true,
+        sent: true,
 
-      user_id:
-        user.id,
+        user_id:
+          user.id,
 
-      username:
-        user.username,
+        username:
+          user.username,
 
-      message,
-    });
+        message,
+      },
+      {
+        headers: corsHeaders,
+      }
+    );
 
   } catch (error) {
 
@@ -731,6 +899,7 @@ async function handleTestNotification(
       "[LINE TEST ERROR]",
       error
     );
+
 
     return Response.json(
       {
@@ -742,6 +911,7 @@ async function handleTestNotification(
       },
       {
         status: 500,
+        headers: corsHeaders,
       }
     );
   }
@@ -753,21 +923,27 @@ async function handleTestNotification(
    ========================================================= */
 
 export async function GET() {
-  return Response.json({
-    success: true,
 
-    service:
-      "ChanPro LINE Notification API",
+  return Response.json(
+    {
+      success: true,
 
-    endpoints: {
-      notification:
-        "POST /api/line/notification",
+      service:
+        "ChanPro LINE Notification API",
 
-      test:
-        "POST /api/line/notification",
+      endpoints: {
+        notification:
+          "POST /api/line/notification",
+
+        test:
+          "POST /api/line/notification",
+      },
+
+      message:
+        "GETはテスト用APIではありません。",
     },
-
-    message:
-      "GETはテスト用APIではありません。",
-  });
+    {
+      headers: corsHeaders,
+    }
+  );
 }
