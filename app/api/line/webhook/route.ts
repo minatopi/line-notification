@@ -11,19 +11,35 @@ function verifySignature(
   signature: string,
   channelSecret: string
 ) {
-  const hash = crypto
-    .createHmac("sha256", channelSecret)
-    .update(body)
-    .digest("base64");
 
-  const a = Buffer.from(hash);
-  const b = Buffer.from(signature);
+  const hash =
+    crypto
+      .createHmac(
+        "sha256",
+        channelSecret
+      )
+      .update(body)
+      .digest("base64");
 
-  if (a.length !== b.length) {
+
+  const a =
+    Buffer.from(hash);
+
+  const b =
+    Buffer.from(signature);
+
+
+  if (
+    a.length !== b.length
+  ) {
     return false;
   }
 
-  return crypto.timingSafeEqual(a, b);
+
+  return crypto.timingSafeEqual(
+    a,
+    b
+  );
 }
 
 
@@ -32,11 +48,13 @@ function verifySignature(
    ========================================================= */
 
 function getSupabaseAdmin() {
+
   const url =
     process.env.NEXT_PUBLIC_SUPABASE_URL;
 
   const serviceRoleKey =
     process.env.SUPABASE_SERVICE_ROLE_KEY;
+
 
   if (!url) {
     throw new Error(
@@ -44,11 +62,13 @@ function getSupabaseAdmin() {
     );
   }
 
+
   if (!serviceRoleKey) {
     throw new Error(
       "SUPABASE_SERVICE_ROLE_KEY is not set"
     );
   }
+
 
   return createClient(
     url,
@@ -64,15 +84,17 @@ function getSupabaseAdmin() {
 
 
 /* =========================================================
-   LINEへ返信
+   LINE返信
    ========================================================= */
 
 async function replyToLine(
   replyToken: string,
   text: string
 ) {
+
   const accessToken =
     process.env.LINE_CHANNEL_ACCESS_TOKEN;
+
 
   if (!accessToken) {
     throw new Error(
@@ -80,42 +102,453 @@ async function replyToLine(
     );
   }
 
-  const response = await fetch(
-    "https://api.line.me/v2/bot/message/reply",
-    {
-      method: "POST",
 
-      headers: {
-        "Content-Type": "application/json",
-        Authorization:
-          `Bearer ${accessToken}`,
-      },
+  const response =
+    await fetch(
+      "https://api.line.me/v2/bot/message/reply",
+      {
+        method: "POST",
 
-      body: JSON.stringify({
-        replyToken,
+        headers: {
+          "Content-Type":
+            "application/json",
 
-        messages: [
-          {
-            type: "text",
-            text,
-          },
-        ],
-      }),
-    }
-  );
+          Authorization:
+            `Bearer ${accessToken}`,
+        },
 
-  const body =
+        body:
+          JSON.stringify({
+            replyToken,
+
+            messages: [
+              {
+                type:
+                  "text",
+
+                text,
+              },
+            ],
+          }),
+      }
+    );
+
+
+  const responseBody =
     await response.text();
 
+
   if (!response.ok) {
+
     console.error(
       "[LINE REPLY ERROR]",
       response.status,
-      body
+      responseBody
     );
+
 
     throw new Error(
       `LINE reply error: ${response.status}`
+    );
+  }
+}
+
+
+/* =========================================================
+   連携コード正規化
+   ========================================================= */
+
+function normalizeLinkCode(
+  text: string
+) {
+
+  return text
+    .trim()
+    .toUpperCase()
+    .replace(
+      /\s+/g,
+      ""
+    );
+}
+
+
+/* =========================================================
+   連携コード形式
+   ========================================================= */
+
+function isLinkCode(
+  text: string
+) {
+
+  return /^CP-[A-Z0-9]{4}-[A-Z0-9]{4}$/
+    .test(text);
+}
+
+
+/* =========================================================
+   連携処理
+   ========================================================= */
+
+async function processLinkCode(
+  supabase: ReturnType<
+    typeof getSupabaseAdmin
+  >,
+  code: string,
+  lineUserId: string,
+  replyToken?: string
+) {
+
+  const normalizedCode =
+    normalizeLinkCode(code);
+
+
+  console.log(
+    "[LINE LINK CODE]",
+    normalizedCode
+  );
+
+
+  /* =====================================================
+     コード検索
+     ===================================================== */
+
+  const {
+    data: linkCode,
+    error: codeError
+  } =
+    await supabase
+      .from("line_link_codes")
+      .select(
+        `
+        id,
+        user_id,
+        code,
+        expires_at,
+        used_at
+        `
+      )
+      .eq(
+        "code",
+        normalizedCode
+      )
+      .is(
+        "used_at",
+        null
+      )
+      .gt(
+        "expires_at",
+        new Date().toISOString()
+      )
+      .maybeSingle();
+
+
+  if (codeError) {
+
+    console.error(
+      "[LINE LINK CODE ERROR]",
+      codeError
+    );
+
+
+    if (replyToken) {
+
+      await replyToLine(
+        replyToken,
+        "連携コードの確認中にエラーが発生しました。"
+      );
+    }
+
+
+    return;
+  }
+
+
+  /* =====================================================
+     無効コード
+     ===================================================== */
+
+  if (!linkCode) {
+
+    if (replyToken) {
+
+      await replyToLine(
+        replyToken,
+        "❌ 連携コードが無効です。\n\nコードの有効期限が切れているか、すでに使用されています。\nChanProで新しい連携コードを発行してください。"
+      );
+    }
+
+
+    return;
+  }
+
+
+  /* =====================================================
+     現在のLINE IDが別ユーザーに
+     登録されていないか確認
+     ===================================================== */
+
+  const {
+    data: existingLineUser,
+    error: existingError
+  } =
+    await supabase
+      .from("users")
+      .select(
+        "id, username"
+      )
+      .eq(
+        "line_user_id",
+        lineUserId
+      )
+      .neq(
+        "id",
+        linkCode.user_id
+      )
+      .maybeSingle();
+
+
+  if (existingError) {
+
+    console.error(
+      "[LINE EXISTING LINK ERROR]",
+      existingError
+    );
+
+
+    if (replyToken) {
+
+      await replyToLine(
+        replyToken,
+        "現在のLINE連携状態を確認できませんでした。"
+      );
+    }
+
+
+    return;
+  }
+
+
+  if (existingLineUser) {
+
+    if (replyToken) {
+
+      await replyToLine(
+        replyToken,
+        `このLINEアカウントは、すでにChanProの「${existingLineUser.username}」に連携されています。\n\n先に現在の連携を解除してから、別のユーザーへ連携してください。`
+      );
+    }
+
+
+    return;
+  }
+
+
+  /* =====================================================
+     ChanProユーザー取得
+     ===================================================== */
+
+  const {
+    data: user,
+    error: userError
+  } =
+    await supabase
+      .from("users")
+      .select(
+        `
+        id,
+        username,
+        line_user_id
+        `
+      )
+      .eq(
+        "id",
+        linkCode.user_id
+      )
+      .maybeSingle();
+
+
+  if (userError) {
+
+    console.error(
+      "[LINE USER ERROR]",
+      userError
+    );
+
+
+    if (replyToken) {
+
+      await replyToLine(
+        replyToken,
+        "ChanProユーザーの確認に失敗しました。"
+      );
+    }
+
+
+    return;
+  }
+
+
+  if (!user) {
+
+    if (replyToken) {
+
+      await replyToLine(
+        replyToken,
+        "連携対象のChanProユーザーが見つかりません。"
+      );
+    }
+
+
+    return;
+  }
+
+
+  /* =====================================================
+     すでに同じLINE IDが登録されている
+     ===================================================== */
+
+  if (
+    user.line_user_id &&
+    user.line_user_id === lineUserId
+  ) {
+
+    /*
+     * コードは使用済みにする。
+     */
+
+    await supabase
+      .from("line_link_codes")
+      .update({
+        used_at:
+          new Date().toISOString(),
+      })
+      .eq(
+        "id",
+        linkCode.id
+      )
+      .is(
+        "used_at",
+        null
+      );
+
+
+    if (replyToken) {
+
+      await replyToLine(
+        replyToken,
+        `このLINEアカウントは、すでにChanProの「${user.username}」と連携されています。`
+      );
+    }
+
+
+    return;
+  }
+
+
+  /* =====================================================
+     LINE ID保存
+     ===================================================== */
+
+  const {
+    error: updateError
+  } =
+    await supabase
+      .from("users")
+      .update({
+        line_user_id:
+          lineUserId,
+      })
+      .eq(
+        "id",
+        user.id
+      );
+
+
+  if (updateError) {
+
+    console.error(
+      "[LINE USER UPDATE ERROR]",
+      updateError
+    );
+
+
+    if (replyToken) {
+
+      await replyToLine(
+        replyToken,
+        "LINE IDの保存に失敗しました。"
+      );
+    }
+
+
+    return;
+  }
+
+
+  /* =====================================================
+     コードを使用済みにする
+     ===================================================== */
+
+  const {
+    error: usedError
+  } =
+    await supabase
+      .from("line_link_codes")
+      .update({
+        used_at:
+          new Date().toISOString(),
+      })
+      .eq(
+        "id",
+        linkCode.id
+      )
+      .is(
+        "used_at",
+        null
+      );
+
+
+  if (usedError) {
+
+    /*
+     * LINE ID保存自体は成功しているので、
+     * ログには残す。
+     */
+
+    console.error(
+      "[LINE LINK CODE USED ERROR]",
+      usedError
+    );
+  }
+
+
+  /* =====================================================
+     成功ログ
+     ===================================================== */
+
+  console.log(
+    "[LINE LINK SUCCESS]",
+    {
+      userId:
+        user.id,
+
+      username:
+        user.username,
+
+      lineUserId,
+    }
+  );
+
+
+  /* =====================================================
+     LINEへ成功通知
+     ===================================================== */
+
+  if (replyToken) {
+
+    await replyToLine(
+      replyToken,
+      `✅ ChanProの「${user.username}」とLINEを連携しました。\n\nこれからChanProの通知をLINEで受け取れます。`
     );
   }
 }
@@ -128,6 +561,7 @@ async function replyToLine(
 export async function POST(
   request: Request
 ) {
+
   try {
 
     console.log(
@@ -135,17 +569,20 @@ export async function POST(
     );
 
 
-    /* -----------------------------------------------------
+    /* =====================================================
        環境変数
-       ----------------------------------------------------- */
+       ===================================================== */
 
     const channelSecret =
       process.env.LINE_CHANNEL_SECRET;
 
+
     if (!channelSecret) {
+
       console.error(
         "[LINE WEBHOOK] LINE_CHANNEL_SECRET is not set"
       );
+
 
       return Response.json(
         {
@@ -160,16 +597,18 @@ export async function POST(
     }
 
 
-    /* -----------------------------------------------------
+    /* =====================================================
        LINE署名
-       ----------------------------------------------------- */
+       ===================================================== */
 
     const signature =
       request.headers.get(
         "x-line-signature"
       );
 
+
     if (!signature) {
+
       return Response.json(
         {
           success: false,
@@ -183,17 +622,17 @@ export async function POST(
     }
 
 
-    /* -----------------------------------------------------
-       生body取得
-       ----------------------------------------------------- */
+    /* =====================================================
+       生Body
+       ===================================================== */
 
     const body =
       await request.text();
 
 
-    /* -----------------------------------------------------
-       署名確認
-       ----------------------------------------------------- */
+    /* =====================================================
+       署名検証
+       ===================================================== */
 
     if (
       !verifySignature(
@@ -202,9 +641,11 @@ export async function POST(
         channelSecret
       )
     ) {
+
       console.error(
         "[LINE WEBHOOK] Invalid signature"
       );
+
 
       return Response.json(
         {
@@ -224,15 +665,38 @@ export async function POST(
     );
 
 
-    /* -----------------------------------------------------
+    /* =====================================================
        JSON
-       ----------------------------------------------------- */
+       ===================================================== */
 
-    const payload =
-      JSON.parse(body);
+    let payload: any;
+
+    try {
+
+      payload =
+        JSON.parse(body);
+
+    } catch {
+
+      return Response.json(
+        {
+          success: false,
+          error:
+            "Invalid JSON",
+        },
+        {
+          status: 400,
+        }
+      );
+    }
+
 
     const events =
-      payload?.events ?? [];
+      Array.isArray(
+        payload?.events
+      )
+        ? payload.events
+        : [];
 
 
     console.log(
@@ -241,10 +705,14 @@ export async function POST(
     );
 
 
-    /*
-     * LINEの検証リクエスト
-     */
-    if (!events.length) {
+    /* =====================================================
+       LINE検証
+       ===================================================== */
+
+    if (
+      events.length === 0
+    ) {
+
       return Response.json({
         success: true,
       });
@@ -256,341 +724,217 @@ export async function POST(
 
 
     /* =====================================================
-       各イベント
+       イベント処理
        ===================================================== */
 
-    for (const event of events) {
+    for (
+      const event of events
+    ) {
 
-      const lineUserId =
-        event?.source?.userId;
+      try {
 
-      console.log(
-        "[LINE EVENT TYPE]",
-        event?.type
-      );
-
-      console.log(
-        "[LINE USER ID]",
-        lineUserId
-      );
-
-
-      if (!lineUserId) {
-        continue;
-      }
-
-
-      /* ===================================================
-         メッセージイベント
-         =================================================== */
-
-      if (
-        event.type === "message" &&
-        event.message?.type === "text"
-      ) {
-
-        const text =
-          event.message.text
-            ?.trim() || "";
+        const lineUserId =
+          event?.source?.userId;
 
 
         console.log(
-          "[LINE MESSAGE]",
-          text
+          "[LINE EVENT TYPE]",
+          event?.type
         );
 
 
-        /* ===============================================
-           連携コマンド
+        console.log(
+          "[LINE USER ID]",
+          lineUserId
+        );
 
-           例：
 
-           連携 minato
-           =============================================== */
+        if (!lineUserId) {
+          continue;
+        }
+
+
+        /* =================================================
+           テキストメッセージ
+           ================================================= */
 
         if (
-          text.startsWith("連携 ")
+          event.type === "message" &&
+          event.message?.type === "text"
         ) {
 
-          const username =
+          const text =
+            typeof event.message.text ===
+              "string"
+              ? event.message.text.trim()
+              : "";
+
+
+          console.log(
+            "[LINE MESSAGE]",
             text
-              .substring(3)
-              .trim();
-
-
-          if (!username) {
-
-            if (event.replyToken) {
-              await replyToLine(
-                event.replyToken,
-                "連携するChanProユーザー名を入力してください。\n\n例：\n連携 minato"
-              );
-            }
-
-            continue;
-          }
-
-
-          console.log(
-            "[LINE LINK] username:",
-            username
           );
 
 
-          /* ---------------------------------------------
-             ChanProユーザー検索
-             --------------------------------------------- */
+          /* ===============================================
+             連携コード
+             =============================================== */
 
-          const {
-            data: user,
-            error: userError,
-          } =
-            await supabase
-              .from("users")
-              .select(
-                "id, username, line_user_id"
-              )
-              .eq(
-                "username",
-                username
-              )
-              .maybeSingle();
-
-
-          if (userError) {
-
-            console.error(
-              "[LINE LINK USER ERROR]",
-              userError
+          const normalized =
+            normalizeLinkCode(
+              text
             );
 
-            if (event.replyToken) {
-              await replyToLine(
-                event.replyToken,
-                "ユーザー検索中にエラーが発生しました。"
-              );
-            }
 
-            continue;
-          }
+          if (
+            isLinkCode(
+              normalized
+            )
+          ) {
 
-
-          if (!user) {
-
-            if (event.replyToken) {
-              await replyToLine(
-                event.replyToken,
-                `ChanProユーザー「${username}」が見つかりません。`
-              );
-            }
-
-            continue;
-          }
-
-
-          /* ---------------------------------------------
-             他ユーザーのLINE IDを上書き
-             --------------------------------------------- */
-
-          const {
-            data: existingLineUser,
-            error: existingError,
-          } =
-            await supabase
-              .from("users")
-              .select(
-                "id, username"
-              )
-              .eq(
-                "line_user_id",
-                lineUserId
-              )
-              .neq(
-                "id",
-                user.id
-              )
-              .maybeSingle();
-
-
-          if (existingError) {
-
-            console.error(
-              "[LINE LINK EXISTING ERROR]",
-              existingError
-            );
-
-            if (event.replyToken) {
-              await replyToLine(
-                event.replyToken,
-                "LINE連携の確認中にエラーが発生しました。"
-              );
-            }
-
-            continue;
-          }
-
-
-          /*
-           * すでに別のChanProユーザーに
-           * このLINE IDが登録されている場合
-           */
-          if (existingLineUser) {
-
-            if (event.replyToken) {
-              await replyToLine(
-                event.replyToken,
-                "このLINEアカウントは、すでに別のChanProユーザーに連携されています。"
-              );
-            }
-
-            continue;
-          }
-
-
-          /* ---------------------------------------------
-             line_user_id保存
-             --------------------------------------------- */
-
-          const {
-            error: updateError
-          } =
-            await supabase
-              .from("users")
-              .update({
-                line_user_id:
-                  lineUserId,
-              })
-              .eq(
-                "id",
-                user.id
-              );
-
-
-          if (updateError) {
-
-            console.error(
-              "[LINE LINK UPDATE ERROR]",
-              updateError
-            );
-
-            if (event.replyToken) {
-              await replyToLine(
-                event.replyToken,
-                "LINE IDの保存に失敗しました。"
-              );
-            }
-
-            continue;
-          }
-
-
-          console.log(
-            "[LINE LINK SUCCESS]",
-            {
-              userId: user.id,
-              username: user.username,
+            await processLinkCode(
+              supabase,
+              normalized,
               lineUserId,
-            }
-          );
-
-
-          /* ---------------------------------------------
-             成功返信
-             --------------------------------------------- */
-
-          if (event.replyToken) {
-
-            await replyToLine(
-              event.replyToken,
-              `✅ ChanProの「${user.username}」とLINEを連携しました。\n\nこれからChanProの通知をLINEで受け取れます。`
+              event.replyToken
             );
 
+
+            continue;
           }
 
-          continue;
-        }
 
+          /* ===============================================
+             連携確認
+             =============================================== */
 
-        /* ===============================================
-           連携確認
-           =============================================== */
+          if (
+            text === "連携確認"
+          ) {
 
-        if (
-          text === "連携確認"
-        ) {
-
-          const {
-            data: linkedUser,
-            error
-          } =
-            await supabase
-              .from("users")
-              .select(
-                "id, username"
-              )
-              .eq(
-                "line_user_id",
-                lineUserId
-              )
-              .maybeSingle();
-
-
-          if (error) {
-
-            console.error(
-              "[LINE LINK CHECK ERROR]",
+            const {
+              data: linkedUser,
               error
-            );
+            } =
+              await supabase
+                .from("users")
+                .select(
+                  "id, username"
+                )
+                .eq(
+                  "line_user_id",
+                  lineUserId
+                )
+                .maybeSingle();
 
-            if (event.replyToken) {
+
+            if (error) {
+
+              console.error(
+                "[LINE LINK CHECK ERROR]",
+                error
+              );
+
+
+              if (
+                event.replyToken
+              ) {
+
+                await replyToLine(
+                  event.replyToken,
+                  "連携情報の取得に失敗しました。"
+                );
+              }
+
+
+              continue;
+            }
+
+
+            if (!linkedUser) {
+
+              if (
+                event.replyToken
+              ) {
+
+                await replyToLine(
+                  event.replyToken,
+                  "このLINEアカウントはChanProと連携されていません。\n\nChanProで連携コードを発行し、そのコードをこのLINEへ送信してください。"
+                );
+              }
+
+
+              continue;
+            }
+
+
+            if (
+              event.replyToken
+            ) {
+
               await replyToLine(
                 event.replyToken,
-                "連携情報の取得に失敗しました。"
+                `現在、ChanProの「${linkedUser.username}」と連携されています。`
               );
             }
+
 
             continue;
           }
 
 
-          if (!linkedUser) {
+          /* ===============================================
+             ヘルプ
+             =============================================== */
 
-            if (event.replyToken) {
+          if (
+            text === "連携"
+          ) {
+
+            if (
+              event.replyToken
+            ) {
+
               await replyToLine(
                 event.replyToken,
-                "このLINEアカウントはChanProと連携されていません。\n\n「連携 ユーザー名」と送信してください。"
+                "ChanProの連携ページで連携コードを発行し、そのコード（例：CP-ABCD-2345）をこのLINEへ送信してください。\n\n連携状態を確認する場合は「連携確認」と送信してください。"
               );
             }
 
+
             continue;
           }
-
-
-          if (event.replyToken) {
-            await replyToLine(
-              event.replyToken,
-              `現在、ChanProの「${linkedUser.username}」と連携されています。`
-            );
-          }
-
-          continue;
         }
+
+
+        /* =================================================
+           その他イベント
+           ================================================= */
+
+        console.log(
+          "[LINE EVENT]",
+          JSON.stringify(
+            event
+          )
+        );
+
+      } catch (eventError) {
+
+        /*
+         * 1イベントのエラーで
+         * 他のイベント処理まで止めない。
+         */
+
+        console.error(
+          "[LINE EVENT ERROR]",
+          eventError
+        );
       }
-
-
-      /* ===================================================
-         その他イベント
-         =================================================== */
-
-      console.log(
-        "[LINE EVENT]",
-        JSON.stringify(event)
-      );
     }
 
 
     /* =====================================================
-       LINEには必ず200
+       LINEには200
        ===================================================== */
 
     return Response.json({
@@ -604,10 +948,7 @@ export async function POST(
       error
     );
 
-    /*
-     * LINE側のWebhook検証では
-     * サーバーエラーを隠さずログへ出す。
-     */
+
     return Response.json(
       {
         success: false,
@@ -629,10 +970,20 @@ export async function POST(
    ========================================================= */
 
 export async function GET() {
+
   return Response.json({
     success: true,
-    service: "ChanPro LINE Webhook",
+
+    service:
+      "ChanPro LINE Webhook",
+
     message:
       "LINEからのWebhookを受け付けます。",
+
+    link_method:
+      "one-time-code",
+
+    code_format:
+      "CP-XXXX-XXXX",
   });
 }
