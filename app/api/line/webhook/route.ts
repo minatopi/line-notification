@@ -3,64 +3,121 @@ import crypto from "crypto";
 function verifySignature(
   body: string,
   signature: string,
-  secret: string
+  channelSecret: string
 ) {
   const hash = crypto
-    .createHmac("sha256", secret)
+    .createHmac("sha256", channelSecret)
     .update(body)
     .digest("base64");
 
-  return crypto.timingSafeEqual(
-    Buffer.from(hash),
-    Buffer.from(signature)
-  );
+  const a = Buffer.from(hash);
+  const b = Buffer.from(signature);
+
+  if (a.length !== b.length) {
+    return false;
+  }
+
+  return crypto.timingSafeEqual(a, b);
 }
 
 export async function POST(request: Request) {
   try {
-    const body = await request.text();
+    console.log("[LINE WEBHOOK] POST received");
+
+    const channelSecret = process.env.LINE_CHANNEL_SECRET;
+
+    if (!channelSecret) {
+      console.error(
+        "[LINE WEBHOOK] LINE_CHANNEL_SECRET is not set"
+      );
+
+      return Response.json(
+        {
+          success: false,
+          error: "LINE_CHANNEL_SECRET is not configured",
+        },
+        {
+          status: 500,
+        }
+      );
+    }
 
     const signature =
       request.headers.get("x-line-signature");
 
-    const channelSecret =
-      process.env.LINE_CHANNEL_SECRET;
-
-    if (!channelSecret) {
-      console.error("LINE_CHANNEL_SECRET is not set");
-
-      return new Response("Server configuration error", {
-        status: 500,
-      });
-    }
-
     if (!signature) {
-      return new Response("Missing signature", {
-        status: 401,
-      });
+      console.error(
+        "[LINE WEBHOOK] x-line-signature is missing"
+      );
+
+      return Response.json(
+        {
+          success: false,
+          error: "x-line-signature is missing",
+        },
+        {
+          status: 401,
+        }
+      );
     }
 
-    if (
-      !verifySignature(
-        body,
-        signature,
-        channelSecret
-      )
-    ) {
-      return new Response("Invalid signature", {
-        status: 401,
-      });
+    // 署名検証前にbodyをJSON化しない
+    const body = await request.text();
+
+    const valid = verifySignature(
+      body,
+      signature,
+      channelSecret
+    );
+
+    if (!valid) {
+      console.error(
+        "[LINE WEBHOOK] Invalid signature"
+      );
+
+      return Response.json(
+        {
+          success: false,
+          error: "Invalid signature",
+        },
+        {
+          status: 401,
+        }
+      );
     }
+
+    console.log(
+      "[LINE WEBHOOK] Signature verified"
+    );
 
     const payload = JSON.parse(body);
 
-    for (const event of payload.events ?? []) {
-      const userId = event?.source?.userId;
+    console.log(
+      "[LINE WEBHOOK] events:",
+      payload.events?.length ?? 0
+    );
 
-      if (userId) {
+    // LINEの疎通確認
+    // events=[] の場合も必ず200を返す
+    if (!Array.isArray(payload.events)) {
+      return Response.json({
+        success: true,
+      });
+    }
+
+    for (const event of payload.events) {
+      const lineUserId =
+        event?.source?.userId;
+
+      console.log(
+        "[LINE EVENT TYPE]",
+        event?.type
+      );
+
+      if (lineUserId) {
         console.log(
           "[LINE USER ID]",
-          userId
+          lineUserId
         );
       }
 
@@ -73,15 +130,20 @@ export async function POST(request: Request) {
     return Response.json({
       success: true,
     });
-
   } catch (error) {
     console.error(
-      "LINE webhook error:",
+      "[LINE WEBHOOK ERROR]",
       error
     );
 
-    return new Response("Internal Server Error", {
-      status: 500,
-    });
+    return Response.json(
+      {
+        success: false,
+        error: "Internal Server Error",
+      },
+      {
+        status: 500,
+      }
+    );
   }
 }
